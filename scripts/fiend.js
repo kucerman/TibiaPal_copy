@@ -950,6 +950,44 @@ class Polygon {
         }
         return null;
     }
+
+	getBoundingBox(){
+		let result;
+		result.minY = Infinity;
+		result.maxY = 0;
+		result.minX = Infinity;
+		result.maxX = 0;
+		for (let i=0; i<this.points.length; i++)
+		{
+			result.minY = Math.min(result.minY, Math.floor(this.points[i].y));
+			result.maxY = Math.max(result.maxY, Math.ceil(this.points[i].y));
+			result.minX = Math.min(result.minX, Math.floor(this.points[i].x));
+			result.maxX = Math.max(result.maxX, Math.ceil(this.points[i].x));
+		}
+		
+		return result;
+	}
+
+	//for given f(x) = y calculates intersections points with all edges of polygons
+	//returns sorted array of x coordinates 
+	getScanLineIntersections(y)
+	{
+		const xcoords = [];
+		//it could be from/to x based on 
+		let P1 = new Point(0,y), P2 = new Point(3000,y);
+		const horizontalLine = new Edge(P1, P2);
+		for(let i =0; i<this.points.length; i++)
+		{
+			let edge = new Edge(this.points[i],this.points[i].next);
+			let point = edge.intersects(horizontalLine);
+
+			if(point!=null) xcoords.push(point.x);
+		}
+		xcoords.sort((a,b) => a-b);
+		return xcoords;
+	}
+
+
 }
 
 class Edge {
@@ -1634,3 +1672,132 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 });
+
+
+class SpotDetector {
+	#svg;
+	constructor(svg){
+		this.#svg = svg;
+	}
+
+	
+
+
+}
+
+class Bitmask {
+	bitmap;
+  constructor(x,y,png) {
+	//snap to 8 px grid to allow byte comparison
+	this.gridSize = 8;
+	//snap x,y to lower multiple
+	this.dx = (x % this.gridSize);
+	this.dy = (y % this.gridSize);
+	this.x = x - this.dx;
+	this.y = y - this.dy;
+	//height and width mist account for /\ and snap to nearest higher multiple
+	this.height = Math.ceil( (png.height + this.dy) / this.gridSize)*this.gridSize;
+	this.width = Math.ceil( (png.width + this.dx) / this.gridSize)*this.gridSize;
+	this.fromPng(png);
+  }
+
+  fromPng(png){
+	const canvas = document.createElement('canvas');
+  	canvas.width = this.width;
+  	canvas.height = this.height;
+  	const ctx = canvas.getContext('2d');
+
+	//drawing image have to account snapping grid to 8 px to allow byte comparison
+  	ctx.drawImage(png, this.dx, this.dy);
+
+	const imageData = ctx.getImageData(0, 0, png.width, png.height);
+  	const data = imageData.data;
+
+	this.bitmap = new Uint8Array((img.width * img.height)/this.gridSize);
+  	for (let i = 0; i < img.width * img.height; i+=this.gridSize) {
+		//assumption is that png have only transparent + white color so we can check 
+		//only red component of RGBA
+		//then we compress 
+		//structure is byte for r,g,b,a;
+		for(let bit=0; bit < this.gridSize; bit++)
+		{
+			this.bitmap[i] |= data[(i+bit) * 4] ? (1 << bit) : 0;
+		}
+  	}
+  }
+
+  //assumption here is that overall bounding box contitions were checked before calling this function
+  //so don't worry here about that. At this point there is definite possibility for common area;
+  haveCommonArea(poly){
+	// poly y boundaries
+	let bbox = poly.getBoundingBox()
+	//update for bitmap size
+	let minY = Math.max(bbox.minY, this.y);
+	let maxY = Math.min(bbox.maxY, this.y+this.height);
+
+	//scanline
+	//find intersections with horizontal line
+	for (let y = minY; y <= maxY; y++) {
+		let xcoords = poly.getScanLineIntersections(y);
+		if(xcoords.length%2 != 0){
+			//error condition, should always get pairs of points
+			return;
+		} 
+		for (let i = 0; i < intersections.length; i += 2) {
+			let xStart = Math.ceil(intersections[i]);
+			let xEnd   = Math.floor(intersections[i + 1]);
+			//cehck if both of intersections are outside of bounding box of png
+			if((xStart < this.x) && (xEnd < this.x)) continue; 
+			if((xStart > this.x+this.width) && (xEnd > this.x+this.width)) continue; 
+			xStart = Math.max(xStart, this.x);
+			xEnd= Math.min(xEnd, this.x+this.width);
+			let byte = 0;
+			if(xStart % this.gridSize != 0){
+				//xStart is not snapped to grid, for first byte comparison we have to prepare proper mask
+				//we should ommit first bits as they represent lower x value
+				for(let bit=0; bit<this.gridSize; bit++){
+					if(bit>=(xStart % this.gridSize)){
+						byte |= 1<<bit;
+					}
+				}
+				//now snap xStart to grid
+				xStart = (xStart % this.gridSize)
+			}
+			//compare first byte
+			if(byte & this.bitmap[this.getIndexFor(xStart,y)] != 0) return true;
+			//advance one byte
+			xStart += this.gridSize;
+			
+			//until we have less than grid size
+			while(xStart - xEnd > this.gridSize){
+				//just check if png for this area is non-blank
+				if(this.bitmap[this.getIndexFor(xStart,y)] != 0) return true;
+
+				xStart += this.gridSize;
+			}
+
+			if(xEnd % this.gridSize != 0){
+				//xEnd is not snapped to grid, for last byte comparison we have to prepare proper mask
+				//we should set first bits as they represent lower x value
+				for(let bit=0; bit<this.gridSize; bit++){
+					if(bit<(xEnd % this.gridSize)){
+						byte |= 1<<bit;
+					}
+				}
+			}
+
+			//compare last byte
+			if(byte & this.bitmap[this.getIndexFor(xStart,y)] != 0) return true;
+
+		}
+  	}
+  }
+
+  getIndexFor(x,y)
+  {
+	if(x%8 != 0 ) return -1; //error
+	return (this.width/this.gridSize)*y + x/this.gridSize;
+  }
+}
+
+       
