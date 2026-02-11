@@ -2608,8 +2608,19 @@ ol, ul {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 1;
   pointer-events: none;
+}
+
+.zindex1 {
+  z-index: 1;
+}
+
+.zindex2 {
+  z-index: 2;
+}
+
+.hidden {
+  display: none;
 }
 
 /*# sourceMappingURL=main.css.map */

@@ -443,11 +443,21 @@ init()
 	grid.classList.add("tibia-map-grid");
 	wrapper.appendChild(grid);
 
-	//add svg overlay 
-	const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-	svg.id = this.container.id + "-svg";
-	svg.classList.add("tibia-map-svg");
-	wrapper.appendChild(svg);
+	//add svg overlay for casted areas
+	this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+	this.svg.id = this.container.id + "-svg";
+	this.svg.classList.add("tibia-map-svg");
+	this.svg.classList.add("zindex2");
+	wrapper.appendChild(this.svg);
+
+	//add svg overlay for ground floor
+	this.svgg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+	this.svgg.id = this.container.id + "-svgg";
+	this.svgg.classList.add("tibia-map-svg");
+	this.svgg.classList.add("zindex1");
+	wrapper.appendChild(this.svgg);
+
+	this.#CreateGroundFloorOverlay();
 
 	//tryload images into image store, starting from index 7 (ground floor)
 	//to get faster initial display time
@@ -468,13 +478,15 @@ init()
 				const grid = document.querySelector('.tibia-map-grid');
 				grid.style.width = `${img.width}px`;
 				grid.style.height = `${img.height}px`;
-				const svg = document.querySelector('.tibia-map-svg');
-				svg.style.width = `${img.width}px`;
-				svg.style.height = `${img.height}px`;
+				const svg = document.querySelectorAll('.tibia-map-svg');
+				svg.forEach((item) => {
+					item.style.width = `${img.width}px`;
+					item.style.height = `${img.height}px`;
+				});
 				//initial load of ground floor
 				this.loadFloor(7);
 				this.#configurePTPZoom();
-				this.#cross = new SVGCross(svg, img.width, img.height);
+				this.#cross = new SVGCross(this.svg, img.width, img.height);
 				this.#cross.setWidth(TibiaMap.crossWidth[this.zoomIdx]);
 				this.mapWrapper.addEventListener('contextmenu', (e) => {
 					e.preventDefault();
@@ -574,8 +586,16 @@ loadFloor(imageIndex) {
 	}
     grid.appendChild(tile);
 	this.floorloaded = imageIndex;
+
+	//if floor 0 was loaded and we load different floor, hide ground floor overlay
+	if((this.currentFloor == 0) && ((7 - imageIndex) != 0)) {
+		this.#hideGroundFloorOverlay();
+	}
 	// Update current floor number (imageIndex 7 = floor 0)
 	this.currentFloor = 7 - imageIndex;
+	if(this.currentFloor == 0) {
+		this.#showGroundFloorOverlay();
+	}
 	// Update floor display button
 	if(this.#floorDisplayButton) {
 		this.#floorDisplayButton.textContent = this.currentFloor.toString();
@@ -683,9 +703,19 @@ getFloorLoaded() {
 
 getSvgContainer()
 {
-	const svg = document.getElementById(this.container.id + '-svg');
-	return svg;
+	return this.svg;
 }
+
+#showGroundFloorOverlay()
+{
+	this.svgg.classList.remove("hidden");
+}
+
+#hideGroundFloorOverlay()
+{
+	this.svgg.classList.add("hidden");
+}
+
 
 hideCross()
 {
@@ -700,6 +730,101 @@ registerCallback(callback)
 	});
 	this.#clickCallback = callback;
 }
+
+#CreateGroundFloorOverlay(){
+	const overlayItems = [
+	{
+		rect: {
+		x: 515,        // center X
+		y: 1600,        // center Y
+		width: 200,
+		height: 200,
+		
+		},
+		text: {
+		offsetX: 0,     // from center
+		offsetY: 0,
+		lines: [
+			"SPIKE",
+			"KAZORDOON"
+		],
+		justify: "middle",  // start | middle | end
+		fontSize: 22,
+		}
+	}
+	];
+	overlayItems.forEach(item => {
+		this.#CreateSingleAreaOverlay(item);
+	});
+}
+#CreateSingleAreaOverlay(item){
+	const style = {
+		//rectangle style params
+		rx: 15,         // corner radius
+		fill: "#333333",
+      	fillOpacity: 0.6,
+      	stroke: "#cfc204",
+      	strokeWidth: 2,
+      	strokeOpacity: 1,
+		//text style params
+		fontFamily: "Arial",
+      	textfill: "#f8be00"
+	}
+	const svgns = "http://www.w3.org/2000/svg";
+
+	// ----- RECTANGLE -----
+	const rect = document.createElementNS(svgns, "rect");
+
+	const rectX = item.rect.x - item.rect.width / 2;
+	const rectY = item.rect.y - item.rect.height / 2;
+
+	rect.setAttribute("x", rectX);
+	rect.setAttribute("y", rectY);
+	rect.setAttribute("width", item.rect.width);
+	rect.setAttribute("height", item.rect.height);
+	rect.setAttribute("rx", style.rx);
+
+	rect.setAttribute("fill", style.fill);
+	rect.setAttribute("fill-opacity", style.fillOpacity);
+	rect.setAttribute("stroke", style.stroke);
+	rect.setAttribute("stroke-width", style.strokeWidth);
+	rect.setAttribute("stroke-opacity", style.strokeOpacity);
+
+	// ----- TEXT -----
+	const text = document.createElementNS(svgns, "text");
+
+	const textX = item.rect.x + item.text.offsetX;
+	const textY = item.rect.y + item.text.offsetY;
+
+	text.setAttribute("x", textX);
+	text.setAttribute("y", textY);
+	text.setAttribute("text-anchor", item.text.justify);
+	text.setAttribute("dominant-baseline", "middle");
+
+	text.setAttribute("font-size", item.text.fontSize);
+	text.setAttribute("font-family", style.fontFamily);
+	text.setAttribute("fill", style.textfill);
+
+	const lineHeight = item.text.fontSize * 1.2;
+
+	item.text.lines.forEach((line, index) => {
+		const tspan = document.createElementNS(svgns, "tspan");
+		tspan.setAttribute("x", textX);
+
+		const offset = (index - (item.text.lines.length - 1) / 2) * lineHeight;
+		tspan.setAttribute("dy", index === 0 ? offset : lineHeight);
+
+		tspan.textContent = line;
+		text.appendChild(tspan);
+	});
+
+	this.svgg.appendChild(rect);
+	this.svgg.appendChild(text);
+}
+
+
+
+
 }
 
 // ============================================================================
