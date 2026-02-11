@@ -1791,6 +1791,8 @@ class Bitmask {
 
 		}
   	}
+	return false;
+	
   }
 
   getIndexFor(x,y)
