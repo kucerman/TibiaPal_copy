@@ -247,6 +247,50 @@ class SVGPolygon{
     }
 }
 
+class SVGText {
+	#svg;
+    #container;
+    constructor(container)
+    {
+        this.#container = container;
+        this.#svg = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        this.#container.appendChild(this.#svg);
+		this.#svg.setAttribute("text-anchor", "middle");
+		this.#svg.setAttribute("dominant-baseline", "middle");
+		this.#svg.setAttribute("font-family", "Arial");
+    }
+
+	destroy(){
+        this.#container.removeChild(this.#svg);
+        this.#svg = null;
+    }
+
+	setStyle(fill, size){
+		this.lineHeight = size*1.2;
+		this.#svg.setAttribute("font-size", size);
+		this.#svg.setAttribute("fill", fill);
+	}
+
+	setOrigin(x,y){
+		this.x = x;
+		this.#svg.setAttribute("x", x);
+		this.#svg.setAttribute("y", y);
+	}
+
+	setText(lines){
+		lines.forEach((line, index) => {
+		const tspan = document.createElementNS("http://www.w3.org/2000/svg", "tspan");
+		tspan.setAttribute("x", this.x);
+
+		const offset = (index - (lines.length - 1) / 2) * this.lineHeight;
+		tspan.setAttribute("dy", index === 0 ? offset : this.lineHeight);
+
+		tspan.textContent = line;
+		this.#svg.appendChild(tspan);
+	});
+	}
+}
+
 // ============================================================================
 // isobutton.js - IsoButton class
 // ============================================================================
@@ -524,6 +568,9 @@ init()
 				const downButton = document.getElementById('button-floor-down');
 				if (upButton) upButton.disabled = false;
 				if (downButton) downButton.disabled = false;
+
+				const event = new CustomEvent("AllFloorsLoaded", {});
+  				document.dispatchEvent(event);
 			}
 		});
 	}
@@ -950,6 +997,45 @@ class Polygon {
         }
         return null;
     }
+
+	getBoundingBox(){
+		let result = {
+		minY: Infinity,
+		maxY: 0,
+		minX: Infinity,
+		maxX: 0
+		}
+		for (let i=0; i<this.points.length; i++)
+		{
+			result.minY = Math.min(result.minY, Math.floor(this.points[i].y));
+			result.maxY = Math.max(result.maxY, Math.ceil(this.points[i].y));
+			result.minX = Math.min(result.minX, Math.floor(this.points[i].x));
+			result.maxX = Math.max(result.maxX, Math.ceil(this.points[i].x));
+		}
+		
+		return result;
+	}
+
+	//for given f(x) = y calculates intersections points with all edges of polygons
+	//returns sorted array of x coordinates 
+	getScanLineIntersections(y)
+	{
+		const xcoords = [];
+		//it could be from/to x based on 
+		let P1 = new Point(0,y), P2 = new Point(3000,y);
+		const horizontalLine = new Edge(P1, P2);
+		for(let i =0; i<this.points.length; i++)
+		{
+			let edge = new Edge(this.points[i],this.points[i].next);
+			let point = edge.intersects(horizontalLine);
+
+			if(point!=null) xcoords.push(point.x);
+		}
+		xcoords.sort((a,b) => a-b);
+		return xcoords;
+	}
+
+
 }
 
 class Edge {
@@ -1379,15 +1465,22 @@ class Manager{
 	#basePolygons = new Map();
 	#intersections = new Map();
 	#svg;
+	#spot;
 	constructor(svg){
+		this.style = {
+			fontSize: 16,
+			fontFamily: "Arial",
+			fill: "#fffb00"
+		};
 		this.#svg = svg;
+		this.#spot = new DynamicSpotNamesOverlay();
 	}
 
 	addPoint(value){
 		const maxPolyCount = 100;
 		//limit nr of base polygons
 		if(this.#basePolygons.size >= maxPolyCount) return;
-		let newData = new HunterDataContainer(new ExivaPolygon(value.distance, value.direction, fromTibiaCoord(value.point)), this.#svg);
+		let newData = new HunterDataContainer(new ExivaPolygon(value.distance, value.direction, fromTibiaCoord(value.point)), this.#svg, this.#spot);
 		newData.score = 1;
 		
 		//lets assume that if new polygon intersects with old intersection polygon, old one can be deleted
@@ -1397,7 +1490,7 @@ class Manager{
 		for (const [key,point] of this.#intersections) {
 			let intersection = new PolygonIntersector(point.poly, newData.poly).doMagic();
 			if(intersection != null){
-				let newIntersection = new HunterDataContainer(intersection, this.#svg);
+				let newIntersection = new HunterDataContainer(intersection, this.#svg, this.#spot);
 				newIntersection.score = this.getScore(point, newData);
 				intersections.push(newIntersection);
 				forDeletion.push(point);
@@ -1408,7 +1501,7 @@ class Manager{
 			for (const [key,point] of this.#basePolygons) {
 				let intersection = new PolygonIntersector(point.poly, newData.poly).doMagic();
 				if(intersection != null){
-					let newIntersection = new HunterDataContainer(intersection, this.#svg);
+					let newIntersection = new HunterDataContainer(intersection, this.#svg, this.#spot);
 					newIntersection.score = this.getScore(point, newData);
 					intersections.push(newIntersection);
 				}
@@ -1478,10 +1571,15 @@ class Manager{
 class HunterDataContainer {
 	static counter = 0;
 	#id;
+	#svg;
 	#svgpolygon;
+	#spot;
+	#text = [];
 	score = 0;
 	poly;
-	constructor(polygon, svg){
+	constructor(polygon, svg, spotdetector){
+		this.#svg = svg;
+		this.#spot = spotdetector;
 		this.#id = HunterDataContainer.counter++;
 		this.poly = polygon;
 		this.#svgpolygon = new SVGPolygon(svg);
@@ -1499,6 +1597,7 @@ class HunterDataContainer {
 
 	destroy(){
 		this.#svgpolygon.destroy();
+		this.#removeSpotNames();
 	}
 
 	#setBaseLook(){
@@ -1510,9 +1609,11 @@ class HunterDataContainer {
 	{
 		if(this.score > maxScore - 1){
 			this.#setResultLook();
+			this.#displaySpotNames();
 		}
 		else{
 			this.#setBackgroundLook();
+			this.#removeSpotNames();
 		}
 	}
 
@@ -1525,7 +1626,232 @@ class HunterDataContainer {
 		this.#svgpolygon.setOpacity(30);
 		this.#svgpolygon.setFillOpacity(30);
 	}
+
+	#displaySpotNames(){
+		let result = this.#spot.findForPolygon(this.poly);
+		if(result.length != 0){
+			result.forEach(item => {
+				let text = new SVGText(this.#svg);
+				text.setOrigin(item.x, item.y);
+				text.setStyle("#ffd900",22);
+				text.setText(item.name);
+				this.#text.push(text);
+			});
+		}
+	}
+
+	#removeSpotNames(){
+		for (const item of this.#text) {
+			item.destroy();
+		}
+		this.#text.length = 0;
+	}
 }
+
+// ============================================================================
+// Dynamic spot name display 
+// ============================================================================
+
+
+class DynamicSpotNamesOverlay {
+	constructor(){
+		this.list = [
+		{	
+			name: {
+				x: 500,     // where name should appear
+				y: 1630,
+				lines: [
+					"SPIKE",
+					"KAZORDOON"
+				],
+			},
+			areas: [
+				{
+					x: 410,        // top left corner coordinates
+					y: 1540,   
+					floor: -1,
+					filename: "spike1.png",
+					bitmask: null
+				}
+			]
+			
+		}
+		];
+		document.addEventListener("AllFloorsLoaded", (event) => {
+    		this.list.forEach(item => {
+				item.areas.forEach(area => {
+					const img = new Image();
+					img.crossOrigin = "anonymous";
+					img.src = `images/areas/${area.filename}`;
+					img.addEventListener('load', ()  => {
+						area.bitmask = new Bitmask(area.x, area.y, img);
+					});
+				});
+			});
+  		});
+	}
+
+
+	findForPolygon(poly){
+		let result = [];
+		this.list.forEach(item => {
+			let floors = [];
+			item.areas.forEach(area => {
+				//TODO, need to check bounding box here 
+				if(area.bitmask !=null && area.bitmask.haveCommonArea(poly) == true){
+					floors.push(area.floor);
+				}
+				});
+			if(floors.length != 0){
+				result.push({x: item.name.x, y: item.name.y, name: item.name.lines, floors: floors})
+			}
+		});
+		return result;
+	}
+
+	
+
+
+}
+
+class Bitmask {
+	bitmap;
+  constructor(x,y,png) {
+	//snap to 8 px grid to allow byte comparison
+	this.gridSize = 8;
+	//snap x to lower multiple
+	this.dx = (x % this.gridSize);
+	this.x = x - this.dx;
+	this.y = y;
+	this.height =png.height;
+	//width must account for /\ and snap to nearest higher multiple
+	this.width = Math.ceil( (png.width + this.dx) / this.gridSize)*this.gridSize;
+	this.fromPng(png);
+  }
+
+  fromPng(png){
+	const canvas = document.createElement('canvas');
+  	canvas.width = this.width;
+  	canvas.height = this.height;
+  	const ctx = canvas.getContext('2d');
+
+	//drawing image have to account snapping grid to 8 px to allow byte comparison
+  	ctx.drawImage(png, this.dx, 0);
+
+	document.getElementById('tibia-map-wrapper').appendChild(canvas);
+
+	const imageData = ctx.getImageData(0, 0, this.width, this.height);
+  	const data = imageData.data;
+	const totalPixels = this.width * this.height;
+	this.bitmap = new Uint8Array((totalPixels)/this.gridSize);
+
+	for (let i = 0; i < totalPixels; i++) {
+    const pixelIndex = i * 4; // 4 bytes per pixel
+
+    const r = data[pixelIndex];
+    const g = data[pixelIndex + 1];
+    const b = data[pixelIndex + 2];
+
+    // White if any RGB component is non-zero
+    const isWhite = (r !== 0 || g !== 0 || b !== 0) ? 1 : 0;
+
+    if (isWhite) {
+        const byteIndex = i >> 3;          // divide by 8
+        const bitIndex  = i & 7;           // modulo 8
+        this.bitmap[byteIndex] |= (1 << bitIndex);
+    }
+}
+  }
+
+  //assumption here is that overall bounding box contitions were checked before calling this function
+  //so don't worry here about that. At this point there is definite possibility for common area;
+  haveCommonArea(poly){
+	// poly y boundaries
+	let bbox = poly.getBoundingBox()
+	//update for bitmap size
+	let minY = Math.max(bbox.minY, this.y);
+	let maxY = Math.min(bbox.maxY, this.y+this.height);
+
+	//scanline
+	//find intersections with horizontal line
+	for (let y = minY; y <= maxY; y++) {
+		let xcoords = poly.getScanLineIntersections(y);
+		if(xcoords.length%2 != 0){
+			//error condition, should always get pairs of points
+			continue;
+		} 
+		for (let i = 0; i < xcoords.length; i += 2) {
+			let xStart = Math.ceil(xcoords[i]);
+			let xEnd   = Math.floor(xcoords[i + 1]);
+			console.log(`Checking for ${y}: xStart ${xStart}, xEnd ${xEnd}`);
+			//cehck if both of intersections are outside of bounding box of png
+			if((xStart < this.x) && (xEnd < this.x)) continue; 
+			if((xStart > this.x+this.width) && (xEnd > this.x+this.width)) continue; 
+			xStart = Math.max(xStart, this.x);
+			xEnd= Math.min(xEnd, this.x+this.width);
+			let byte = 0;
+			if(xStart % this.gridSize != 0){
+				//xStart is not snapped to grid, for first byte comparison we have to prepare proper mask
+				//we should ommit first bits as they represent lower x value
+				for(let bit=0; bit<this.gridSize; bit++){
+					if(bit>=(xStart % this.gridSize)){
+						byte |= 1<<bit;
+					}
+				}
+				//now snap xStart to grid
+				xStart -= (xStart % this.gridSize)
+			}
+			//compare first byte
+			if(this.compare(byte, xStart, y) == true) return true;
+			//advance one byte
+			xStart += this.gridSize;
+			
+			//until we have less than grid size
+			while(xStart - xEnd > this.gridSize){
+				//just check if png for this area is non-blank
+				if(this.compare(255, xStart, y) == true) return true;
+				xStart += this.gridSize;
+			}
+
+			byte = 0;
+			if(xEnd % this.gridSize != 0){
+				//xEnd is not snapped to grid, for last byte comparison we have to prepare proper mask
+				//we should set first bits as they represent lower x value
+				for(let bit=0; bit<this.gridSize; bit++){
+					if(bit<(xEnd % this.gridSize)){
+						byte |= 1<<bit;
+					}
+				}
+			}
+
+			//compare last byte
+			if(this.compare(byte, xStart, y) == true) return true;
+
+		}
+  	}
+	return false;
+	
+  }
+
+  compare(byte, x, y)
+  {
+	let value = this.bitmap[this.getIndexFor(x-this.x,y-this.y)];
+	let result = value & byte;
+	console.log(`Checking byte ${byte} for ${x},${y}: value ${value}, result ${result}`);
+
+	if(result !=0) return true;
+	return false;
+  }
+
+  getIndexFor(x,y)
+  {
+	if(x%8 != 0 ) return -1; //error
+	const pixelIndex = y * this.width + x;
+    return pixelIndex /this.gridSize;
+  }
+}
+
+       
 
 // ============================================================================
 // Initialization
@@ -1634,3 +1960,4 @@ document.addEventListener('DOMContentLoaded', () => {
 		}
 	});
 });
+
